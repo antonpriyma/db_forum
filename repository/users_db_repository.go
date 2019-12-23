@@ -135,7 +135,7 @@ func (u *UsersRepositoryImpl) GetUserByEmail(nickname string) (*models.User, *mo
 	if err := row.Scan(&user.ID, &user.Nickname,
 		&user.Fullname, &user.About, &user.Email); err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, models.NewError(models.RowNotFound, "row does not found")
+			return nil, models.NewError(models.RowNotFound, "row does not found "+nickname)
 		}
 
 		return nil, models.NewError(models.InternalDatabase, err.Error())
