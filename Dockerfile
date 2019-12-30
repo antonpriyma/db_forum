@@ -20,7 +20,10 @@ USER postgres
 #       allows the RUN command to span multiple lines.
 RUN    /etc/init.d/postgresql start &&\
     psql --command "CREATE USER docker WITH SUPERUSER PASSWORD 'docker';" &&\
-    createdb -O docker docker
+    createdb -O docker docker &&\
+                              	psql --command "GRANT ALL ON DATABASE docker TO docker;" &&\
+                              	psql -d docker --command "CREATE EXTENSION IF NOT EXISTS citext;" &&\
+                                  /etc/init.d/postgresql stop
 
 # Adjust PostgreSQL configuration so that remote connections to the
 # database are possible.
@@ -47,8 +50,8 @@ VOLUME  ["/etc/postgresql", "/var/log/postgresql", "/var/lib/postgresql"]
 USER root
 
 # golang install
-RUN wget https://dl.google.com/go/go1.12.1.linux-amd64.tar.gz
-RUN tar -C /usr/local -xzf go1.12.1.linux-amd64.tar.gz
+RUN wget https://dl.google.com/go/go1.13.5.linux-amd64.tar.gz
+RUN tar -C /usr/local -xzf go1.13.5.linux-amd64.tar.gz
 RUN mkdir -p $HOME/go_test/{src,pkg,bin}
 
 ENV GOPATH=$HOME/go
@@ -57,7 +60,6 @@ ENV PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
 RUN mkdir -p src
 COPY ./ src/github.com/AntonPriyma/db_forum
 WORKDIR /src/github.com/AntonPriyma/db_forum
-RUN go get -d -v
 RUN go build
 
 EXPOSE 5000
