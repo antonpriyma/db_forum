@@ -80,14 +80,7 @@ CREATE TRIGGER post_insert_trigger AFTER INSERT ON posts
     FOR EACH ROW EXECUTE PROCEDURE post_count_increment();
 -- INDEX
 -- FORUMS
-CREATE UNIQUE INDEX IF NOT EXISTS idx_forums_slug_uindex
-    ON forums (slug);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_forums_userNick_unique
-    ON forums (owner);
-
-CREATE INDEX forum_cover_index
-    ON forums (id, slug, title, threads, posts, owner);
+CREATE INDEX forums_slug_ind ON forums USING BTREE (slug);
 --
 -- POSTS
 CREATE INDEX posts_thread_index
@@ -100,17 +93,11 @@ CREATE INDEX parent_tree
     ON posts (parents DESC, id);
 --
 -- THREADS
-CREATE INDEX threads_slug_id_index
-    ON threads (slug, id);
-CREATE UNIQUE INDEX threads_id_forum_index
-    ON threads (id, forum);
-CREATE UNIQUE INDEX thread_slug_forum_index
-    ON threads (slug, forum);
-CREATE UNIQUE INDEX threads_cover_index
-    ON threads (id, slug, title, message, votes, created, author, forum);
+CREATE INDEX threads_id_ind ON threads USING BTREE (id);
+CREATE INDEX threads_slug_ind ON threads USING BTREE (slug);
+CREATE INDEX threads_forum_created_ind ON threads USING BTREE (forum, created);
 --
 -- USERS
-CREATE INDEX ON users (nickname, email);
-CREATE INDEX users_cover_index
-    ON users (nickname, email, about, fullname);
+CREATE INDEX users_nickname_ind ON users USING BTREE (nickname);
+CREATE INDEX users_email_ind ON users USING BTREE (email);
 --
