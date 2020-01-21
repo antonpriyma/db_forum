@@ -1,21 +1,24 @@
 package models
 
 import (
-	"log"
-	"regexp"
 	"time"
 )
 
 //easyjson:json
 type Thread struct {
-	ID      int64      `json:"id"`
-	Slug    *string    `json:"slug"`
-	Title   string     `json:"title"`
-	Message string     `json:"message"`
-	Votes   int32      `json:"votes"`
-	Created *time.Time `json:"created"`
-	Author  string     `json:"author"`
-	Forum   string     `json:"forum"`
+	Author string `json:"author"`
+	Created time.Time `json:"created,omitempty"`
+	Forum string `json:"forum,omitempty"`
+	ID int32 `json:"id,omitempty"`
+	Message string `json:"message"`
+	Slug string `json:"slug,omitempty"`
+	Title string `json:"title"`
+	Votes int32 `json:"votes,omitempty"`
+}
+
+type ThreadUpdate struct {
+	Message string `json:"message,omitempty"`
+	Title string `json:"title,omitempty"`
 }
 
 //easyjson:json
@@ -28,25 +31,7 @@ type Vote struct {
 	VoiceImpl bool
 }
 
-var (
-	threadSlugRegexp *regexp.Regexp
-)
 
-func init() {
-	var err error
-	threadSlugRegexp, err = regexp.Compile(`^(\d|\w|-|_)*(\w|-|_)(\d|\w|-|_)*$`)
-	if err != nil {
-		log.Fatalf("slug regexp err: %s", err.Error())
-	}
-}
 
-// Validate проверка полей
-func (t *Thread) Validate() *Error {
-	if !((t.Slug == nil || (t.Slug != nil && threadSlugRegexp.MatchString(*t.Slug))) &&
-		t.Title != "" && t.Message != "") {
-		return NewError(ValidationFailed, "validation failed")
-	}
 
-	return nil
-}
 

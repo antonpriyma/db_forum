@@ -1,5 +1,7 @@
 package models
 
+import "errors"
+
 // Error объект для удобства обработки ошибок
 type Error struct {
 	Code    int    `json:"-"`
@@ -27,4 +29,26 @@ const (
 	ForeignKeyNotFound
 	// ForeignKeyConflict запись на которую ссылаемся некорректна(например родитель в другом треде)
 	ForeignKeyConflict
+)
+
+const (
+	PgxOK            = ""
+	PgxErrNotNull    = "23502"
+	PgxErrForeignKey = "23503"
+	PgxErrUnique     = "23505"
+	NoRowsInResult   = "no rows in result set"
+)
+
+// Ошибки запросов
+var (
+	ForumIsExist			 = errors.New("Forum was created earlier")
+	ForumNotFound			 = errors.New("Forum not found")
+	ForumOrAuthorNotFound	 = errors.New("Forum or Author not found")
+	UserNotFound			 = errors.New("User not found")
+	UserIsExist				 = errors.New("User was created earlier")
+	UserUpdateConflict		 = errors.New("User not updated")
+	ThreadIsExist			 = errors.New("Thread was created earlier")
+	ThreadNotFound			 = errors.New("Thread not found")
+	PostParentNotFound		 = errors.New("No parent for thread")
+	PostNotFound			 = errors.New("Post not found")
 )

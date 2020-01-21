@@ -1,19 +1,19 @@
 package models
 
+
 import (
 	"log"
 	"regexp"
 )
 
-// User информация о пользователе
 //easyjson:json
 type User struct {
-	ID       int64  `json:"-"`
-	Nickname string `json:"nickname"`
+	About string `json:"about,omitempty"`
+	Email string `json:"email"`
 	Fullname string `json:"fullname"`
-	About    string `json:"about"`
-	Email    string `json:"email"`
+	Nickname string `json:"nickname,omitempty"`
 }
+
 
 // UpdateUserFields структура для обновления полей юзера
 //easyjson:json

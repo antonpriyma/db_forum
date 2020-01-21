@@ -114,14 +114,14 @@ func easyjson9e1087fdDecodeGithubComAntonPriymaDbForumModels1(in *jlexer.Lexer, 
 			continue
 		}
 		switch key {
-		case "nickname":
-			out.Nickname = string(in.String())
-		case "fullname":
-			out.Fullname = string(in.String())
 		case "about":
 			out.About = string(in.String())
 		case "email":
 			out.Email = string(in.String())
+		case "fullname":
+			out.Fullname = string(in.String())
+		case "nickname":
+			out.Nickname = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -136,30 +136,31 @@ func easyjson9e1087fdEncodeGithubComAntonPriymaDbForumModels1(out *jwriter.Write
 	out.RawByte('{')
 	first := true
 	_ = first
+	if in.About != "" {
+		const prefix string = ",\"about\":"
+		first = false
+		out.RawString(prefix[1:])
+		out.String(string(in.About))
+	}
 	{
-		const prefix string = ",\"nickname\":"
+		const prefix string = ",\"email\":"
 		if first {
 			first = false
 			out.RawString(prefix[1:])
 		} else {
 			out.RawString(prefix)
 		}
-		out.String(string(in.Nickname))
+		out.String(string(in.Email))
 	}
 	{
 		const prefix string = ",\"fullname\":"
 		out.RawString(prefix)
 		out.String(string(in.Fullname))
 	}
-	{
-		const prefix string = ",\"about\":"
+	if in.Nickname != "" {
+		const prefix string = ",\"nickname\":"
 		out.RawString(prefix)
-		out.String(string(in.About))
-	}
-	{
-		const prefix string = ",\"email\":"
-		out.RawString(prefix)
-		out.String(string(in.Email))
+		out.String(string(in.Nickname))
 	}
 	out.RawByte('}')
 }

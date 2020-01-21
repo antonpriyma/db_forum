@@ -7,7 +7,6 @@ import (
 	easyjson "github.com/mailru/easyjson"
 	jlexer "github.com/mailru/easyjson/jlexer"
 	jwriter "github.com/mailru/easyjson/jwriter"
-	time "time"
 )
 
 // suppress unused package warning
@@ -176,7 +175,7 @@ func (v *Threads) UnmarshalJSON(data []byte) error {
 func (v *Threads) UnmarshalEasyJSON(l *jlexer.Lexer) {
 	easyjson2d00218DecodeGithubComAntonPriymaDbForumModels1(l, v)
 }
-func easyjson2d00218DecodeGithubComAntonPriymaDbForumModels2(in *jlexer.Lexer, out *Thread) {
+func easyjson2d00218DecodeGithubComAntonPriymaDbForumModels2(in *jlexer.Lexer, out *ThreadUpdate) {
 	isTopLevel := in.IsStart()
 	if in.IsNull() {
 		if isTopLevel {
@@ -195,40 +194,10 @@ func easyjson2d00218DecodeGithubComAntonPriymaDbForumModels2(in *jlexer.Lexer, o
 			continue
 		}
 		switch key {
-		case "id":
-			out.ID = int64(in.Int64())
-		case "slug":
-			if in.IsNull() {
-				in.Skip()
-				out.Slug = nil
-			} else {
-				if out.Slug == nil {
-					out.Slug = new(string)
-				}
-				*out.Slug = string(in.String())
-			}
-		case "title":
-			out.Title = string(in.String())
 		case "message":
 			out.Message = string(in.String())
-		case "votes":
-			out.Votes = int32(in.Int32())
-		case "created":
-			if in.IsNull() {
-				in.Skip()
-				out.Created = nil
-			} else {
-				if out.Created == nil {
-					out.Created = new(time.Time)
-				}
-				if data := in.Raw(); in.Ok() {
-					in.AddError((*out.Created).UnmarshalJSON(data))
-				}
-			}
-		case "author":
-			out.Author = string(in.String())
-		case "forum":
-			out.Forum = string(in.String())
+		case "title":
+			out.Title = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -239,57 +208,142 @@ func easyjson2d00218DecodeGithubComAntonPriymaDbForumModels2(in *jlexer.Lexer, o
 		in.Consumed()
 	}
 }
-func easyjson2d00218EncodeGithubComAntonPriymaDbForumModels2(out *jwriter.Writer, in Thread) {
+func easyjson2d00218EncodeGithubComAntonPriymaDbForumModels2(out *jwriter.Writer, in ThreadUpdate) {
+	out.RawByte('{')
+	first := true
+	_ = first
+	if in.Message != "" {
+		const prefix string = ",\"message\":"
+		first = false
+		out.RawString(prefix[1:])
+		out.String(string(in.Message))
+	}
+	if in.Title != "" {
+		const prefix string = ",\"title\":"
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
+		out.String(string(in.Title))
+	}
+	out.RawByte('}')
+}
+
+// MarshalJSON supports json.Marshaler interface
+func (v ThreadUpdate) MarshalJSON() ([]byte, error) {
+	w := jwriter.Writer{}
+	easyjson2d00218EncodeGithubComAntonPriymaDbForumModels2(&w, v)
+	return w.Buffer.BuildBytes(), w.Error
+}
+
+// MarshalEasyJSON supports easyjson.Marshaler interface
+func (v ThreadUpdate) MarshalEasyJSON(w *jwriter.Writer) {
+	easyjson2d00218EncodeGithubComAntonPriymaDbForumModels2(w, v)
+}
+
+// UnmarshalJSON supports json.Unmarshaler interface
+func (v *ThreadUpdate) UnmarshalJSON(data []byte) error {
+	r := jlexer.Lexer{Data: data}
+	easyjson2d00218DecodeGithubComAntonPriymaDbForumModels2(&r, v)
+	return r.Error()
+}
+
+// UnmarshalEasyJSON supports easyjson.Unmarshaler interface
+func (v *ThreadUpdate) UnmarshalEasyJSON(l *jlexer.Lexer) {
+	easyjson2d00218DecodeGithubComAntonPriymaDbForumModels2(l, v)
+}
+func easyjson2d00218DecodeGithubComAntonPriymaDbForumModels3(in *jlexer.Lexer, out *Thread) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeString()
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "author":
+			out.Author = string(in.String())
+		case "created":
+			if data := in.Raw(); in.Ok() {
+				in.AddError((out.Created).UnmarshalJSON(data))
+			}
+		case "forum":
+			out.Forum = string(in.String())
+		case "id":
+			out.ID = int32(in.Int32())
+		case "message":
+			out.Message = string(in.String())
+		case "slug":
+			out.Slug = string(in.String())
+		case "title":
+			out.Title = string(in.String())
+		case "votes":
+			out.Votes = int32(in.Int32())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+func easyjson2d00218EncodeGithubComAntonPriymaDbForumModels3(out *jwriter.Writer, in Thread) {
 	out.RawByte('{')
 	first := true
 	_ = first
 	{
-		const prefix string = ",\"id\":"
+		const prefix string = ",\"author\":"
 		out.RawString(prefix[1:])
-		out.Int64(int64(in.ID))
+		out.String(string(in.Author))
 	}
-	{
-		const prefix string = ",\"slug\":"
+	if true {
+		const prefix string = ",\"created\":"
 		out.RawString(prefix)
-		if in.Slug == nil {
-			out.RawString("null")
-		} else {
-			out.String(string(*in.Slug))
-		}
+		out.Raw((in.Created).MarshalJSON())
 	}
-	{
-		const prefix string = ",\"title\":"
+	if in.Forum != "" {
+		const prefix string = ",\"forum\":"
 		out.RawString(prefix)
-		out.String(string(in.Title))
+		out.String(string(in.Forum))
+	}
+	if in.ID != 0 {
+		const prefix string = ",\"id\":"
+		out.RawString(prefix)
+		out.Int32(int32(in.ID))
 	}
 	{
 		const prefix string = ",\"message\":"
 		out.RawString(prefix)
 		out.String(string(in.Message))
 	}
+	if in.Slug != "" {
+		const prefix string = ",\"slug\":"
+		out.RawString(prefix)
+		out.String(string(in.Slug))
+	}
 	{
+		const prefix string = ",\"title\":"
+		out.RawString(prefix)
+		out.String(string(in.Title))
+	}
+	if in.Votes != 0 {
 		const prefix string = ",\"votes\":"
 		out.RawString(prefix)
 		out.Int32(int32(in.Votes))
-	}
-	{
-		const prefix string = ",\"created\":"
-		out.RawString(prefix)
-		if in.Created == nil {
-			out.RawString("null")
-		} else {
-			out.Raw((*in.Created).MarshalJSON())
-		}
-	}
-	{
-		const prefix string = ",\"author\":"
-		out.RawString(prefix)
-		out.String(string(in.Author))
-	}
-	{
-		const prefix string = ",\"forum\":"
-		out.RawString(prefix)
-		out.String(string(in.Forum))
 	}
 	out.RawByte('}')
 }
@@ -297,23 +351,23 @@ func easyjson2d00218EncodeGithubComAntonPriymaDbForumModels2(out *jwriter.Writer
 // MarshalJSON supports json.Marshaler interface
 func (v Thread) MarshalJSON() ([]byte, error) {
 	w := jwriter.Writer{}
-	easyjson2d00218EncodeGithubComAntonPriymaDbForumModels2(&w, v)
+	easyjson2d00218EncodeGithubComAntonPriymaDbForumModels3(&w, v)
 	return w.Buffer.BuildBytes(), w.Error
 }
 
 // MarshalEasyJSON supports easyjson.Marshaler interface
 func (v Thread) MarshalEasyJSON(w *jwriter.Writer) {
-	easyjson2d00218EncodeGithubComAntonPriymaDbForumModels2(w, v)
+	easyjson2d00218EncodeGithubComAntonPriymaDbForumModels3(w, v)
 }
 
 // UnmarshalJSON supports json.Unmarshaler interface
 func (v *Thread) UnmarshalJSON(data []byte) error {
 	r := jlexer.Lexer{Data: data}
-	easyjson2d00218DecodeGithubComAntonPriymaDbForumModels2(&r, v)
+	easyjson2d00218DecodeGithubComAntonPriymaDbForumModels3(&r, v)
 	return r.Error()
 }
 
 // UnmarshalEasyJSON supports easyjson.Unmarshaler interface
 func (v *Thread) UnmarshalEasyJSON(l *jlexer.Lexer) {
-	easyjson2d00218DecodeGithubComAntonPriymaDbForumModels2(l, v)
+	easyjson2d00218DecodeGithubComAntonPriymaDbForumModels3(l, v)
 }
