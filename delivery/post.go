@@ -1,16 +1,16 @@
 package delivery
 
 import (
+	"encoding/json"
 	"github.com/AntonPriyma/db_forum/models"
 	"github.com/AntonPriyma/db_forum/repository"
 	"github.com/AntonPriyma/db_forum/utils"
+	"github.com/go-openapi/swag"
+	"github.com/gorilla/mux"
+	"io/ioutil"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
-
-
-	"github.com/gorilla/mux"
 )
 
 type PostHandlers struct {
@@ -23,139 +23,130 @@ func NewPostHandlers(posts repository.PostRepository, users repository.UsersRepo
 }
 
 func(h *PostHandlers) CreatePosts(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	params := mux.Vars(r)
+	param := params["slug_or_id"]
 
-	var slugOrID interface{}
-	slug := vars["slug_or_id"]
-	slugOrID = slug
-
-	threadID, err := strconv.ParseInt(slug, 10, 64)
-	if err == nil {
-		slugOrID = threadID
-	}
-
-	newPosts := make(models.Posts, 0)
-	err = utils.DecodeEasyjson(r.Body, &newPosts)
+	body, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
 	if err != nil {
-		utils.WriteEasyjson(w, http.StatusBadRequest, &models.Error{
-			Message: "unable to decode request body;",
-		})
+		utils.MakeResponse(w, 500, []byte(err.Error()))
+		return
+	}
+	posts := &models.Posts{}
+	err = json.Unmarshal(body, &posts)
+	if err != nil {
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 		return
 	}
 
-	creationTime := time.Now()
-	for _, p := range newPosts {
-		p.Created = creationTime
+	result, err := h.posts.Create(posts, param)
+
+
+
+	switch err {
+	case nil:
+		resp,_:=swag.WriteJSON(result)
+		utils.MakeResponse(w, 201, resp)
+	case models.ThreadNotFound:
+		utils.MakeResponse(w, 404, []byte(utils.MakeErrorThreadID(param)))
+	case models.UserNotFound:
+		utils.MakeResponse(w, 404, []byte(utils.MakeErrorPostAuthor(param)))
+	case models.PostParentNotFound:
+		utils.MakeResponse(w, 409, []byte(utils.MakeErrorThreadConflict()))
+	default:
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 	}
-
-	if createError := h.posts.Create(newPosts,slugOrID); createError != nil {
-		var code int
-		if createError.Code == models.ValidationFailed {
-			code = http.StatusBadRequest
-		} else if createError.Code == models.ForeignKeyNotFound {
-			code = http.StatusNotFound
-		} else if createError.Code == models.ForeignKeyConflict {
-			code = http.StatusConflict
-		} else {
-			code = http.StatusInternalServerError
-		}
-
-		utils.WriteEasyjson(w, code, createError)
-		return
-	}
-
-	utils.WriteEasyjson(w, http.StatusCreated, newPosts)
 }
 
 func(h *PostHandlers) GetPosts(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-
-	slug := vars["slug_or_id"]
-	threadID, err := strconv.ParseInt(slug, 10, 64)
-	isID := (err == nil)
-
-	query := r.URL.Query()
-	limitParam, err := strconv.Atoi(query.Get("limit"))
-	if err != nil {
-		limitParam = -1
+	params := mux.Vars(r)
+	param := params["slug_or_id"]
+	queryParams := r.URL.Query()
+	var limit, since, sort, desc string
+	if limit = queryParams.Get("limit"); limit == "" {
+		limit = "1"
 	}
-	offsetParam, _ := strconv.ParseInt(query.Get("since"), 10, 64)
-	desc := (query.Get("desc") == "true")
-
-	mode := repository.Flat
-	switch query.Get("sort") {
-	case "flat":
-		mode = repository.Flat
-	case "tree":
-		mode = repository.Tree
-	case "parent_tree":
-		mode = repository.ParentTree
+	since = queryParams.Get("since");
+	// if since = queryParams.Get("since"); since == "" {
+	// 	since = "";
+	// }
+	if sort = queryParams.Get("sort"); sort == ""{
+		sort = "flat"
 	}
-
-	var posts models.Posts
-	var getError *models.Error
-	if isID {
-		posts, getError = h.posts.GetPostsByThreadID(threadID, limitParam, offsetParam, mode, desc)
-	} else {
-		posts, getError = h.posts.GetPostsByThreadSlug(slug, limitParam, offsetParam, mode, desc)
+	if desc = queryParams.Get("desc"); desc == ""{
+		desc = "false"
 	}
-	if getError != nil {
-		if getError.Code == models.RowNotFound {
-			utils.WriteEasyjson(w, http.StatusNotFound, getError)
-			return
-		}
+	// fmt.Println("limit", limit, "since", since, "sort", sort, "desc", desc)
+	result, err := h.posts.GetThreadPostsDB(param, limit, since, sort, desc)
 
-		utils.WriteEasyjson(w, http.StatusInternalServerError, getError)
-		return
+	// resp, _ := result.MarshalJSON()
+
+	switch err {
+	case nil:
+		resp, _ := swag.WriteJSON(result)
+		utils.MakeResponse(w, 200, resp)
+	case models.ForumNotFound:
+		utils.MakeResponse(w, 404, []byte(utils.MakeErrorThread(param)))
+	default:
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 	}
-
-	utils.WriteEasyjson(w, http.StatusOK, posts)
 }
 
 func(h *PostHandlers) GetPost(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-
-	id := vars["id"]
-	postID, _ := strconv.ParseInt(id, 10, 64)
-
-	info, err := h.posts.GetPostByID(postID, strings.Split(r.URL.Query().Get("related"), ","))
+	params := mux.Vars(r)
+	id, err := strconv.Atoi(params["id"])
 	if err != nil {
-		if err.Code == models.RowNotFound {
-			utils.WriteEasyjson(w, http.StatusNotFound, err)
-			return
-		}
-
-		utils.WriteEasyjson(w, http.StatusInternalServerError, err)
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 		return
 	}
 
-	utils.WriteEasyjson(w, http.StatusOK, info)
+	queryParams := r.URL.Query()
+	relatedQuery := queryParams.Get("related")
+	var related []string
+	related = append(related, strings.Split(relatedQuery, ",")...)
+
+	result, err := h.posts.GetPostByID(id, related)
+
+	switch err {
+	case nil:
+		resp, _ := result.MarshalJSON()
+		utils.MakeResponse(w, 200, resp)
+	case models.PostNotFound:
+		utils.MakeResponse(w, 404, []byte(utils.MakeErrorPost(string(id))))
+	default:
+		utils.MakeResponse(w, 404, []byte(utils.MakeErrorPost(string(id))))
+	}
 }
 
 func(h *PostHandlers) UpdatePost(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-
-	id := vars["id"]
-	postID, _ := strconv.ParseInt(id, 10, 64)
-	post := &models.Post{}
-	err := utils.DecodeEasyjson(r.Body, post)
+	params := mux.Vars(r)
+	id, err := strconv.Atoi(params["id"])
 	if err != nil {
-		utils.WriteEasyjson(w, http.StatusBadRequest, &models.Error{
-			Message: "unable to decode request body;",
-		})
-		return
-	}
-	post.ID = postID
-
-	if updErr := h.posts.Update(post); updErr != nil {
-		if updErr.Code == models.RowNotFound {
-			utils.WriteEasyjson(w, http.StatusNotFound, updErr)
-			return
-		}
-
-		utils.WriteEasyjson(w, http.StatusInternalServerError, updErr)
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 		return
 	}
 
-	utils.WriteEasyjson(w, http.StatusOK, post)
+	body, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
+	if err != nil {
+		utils.MakeResponse(w, 500, []byte(err.Error()))
+		return
+	}
+	postUpdate := &models.PostUpdate{}
+	err = postUpdate.UnmarshalJSON(body)
+
+	if err != nil {
+		utils.MakeResponse(w, 500, []byte(err.Error()))
+		return
+	}
+	result, err := h.posts.Update(postUpdate, id)
+	switch err {
+	case nil:
+		resp, _ := result.MarshalJSON()
+		utils.MakeResponse(w, 200, resp)
+	case models.PostNotFound:
+		utils.MakeResponse(w, 404, []byte(utils.MakeErrorPost(string(id))))
+	default:
+		utils.MakeResponse(w, 500, []byte(err.Error()))
+	}
 }

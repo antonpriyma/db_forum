@@ -4,12 +4,10 @@ import (
 	"github.com/AntonPriyma/db_forum/models"
 	"github.com/AntonPriyma/db_forum/repository"
 	"github.com/AntonPriyma/db_forum/utils"
-	"net/http"
-	"strconv"
-
-
-
+	"github.com/go-openapi/swag"
 	"github.com/gorilla/mux"
+	"io/ioutil"
+	"net/http"
 )
 
 type ForumHandlers struct {
@@ -23,78 +21,79 @@ func NewForumHandlers(forums repository.ForumRepository, users repository.UsersR
 
 // GetForum получение информации о форуме
 func(h *ForumHandlers) GetForum(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	forumInfo, err := h.forums.GetForumBySlug(vars["slug"])
-	if err != nil {
-		var code int
-		if err.Code == models.InternalDatabase {
-			code = http.StatusInternalServerError
-		} else if err.Code == models.RowNotFound {
-			code = http.StatusNotFound
-		}
+	params := mux.Vars(r)
+	slug := params["slug"]
 
-		utils.WriteEasyjson(w, code, err)
-		return
+	result, err := h.forums.GetForumBySlug(slug)
+
+	switch err {
+	case nil:
+		resp, _ := result.MarshalJSON()
+		utils.MakeResponse(w, 200, resp)
+	case models.ForumNotFound:
+		utils.MakeResponse(w, 404, []byte(utils.MakeErrorForum(slug)))
+	default:
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 	}
-
-	utils.WriteEasyjson(w, http.StatusOK, forumInfo)
 }
 
 // CreateForum создание нового пользователя в базе данных.
 func(h *ForumHandlers) CreateForum(w http.ResponseWriter, r *http.Request) {
-	newForum := &models.Forum{}
-	err := utils.DecodeEasyjson(r.Body, newForum)
+	body, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
 	if err != nil {
-		utils.WriteEasyjson(w, http.StatusBadRequest, &models.Error{
-			Message: "unable to decode request body;",
-		})
+		utils.MakeResponse(w, 500, []byte(err.Error()))
+		return
+	}
+	forum := &models.Forum{}
+	err = forum.UnmarshalJSON(body)
+
+	if err != nil {
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 		return
 	}
 
-	used, errs := h.forums.Create(newForum)
-	if used != nil {
-		utils.WriteEasyjson(w, http.StatusConflict, used)
-		return
+	result, err := h.forums.Create(forum)
+
+	switch err {
+	case nil:
+		resp, _ := result.MarshalJSON()
+		utils.MakeResponse(w, 201, resp)
+	case models.UserNotFound:
+		utils.MakeResponse(w, 404, []byte(utils.MakeErrorUser(forum.Owner)))
+	case models.ForumIsExist:
+		resp, _ := result.MarshalJSON()
+		utils.MakeResponse(w, 409, resp)
+	default:
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 	}
-
-	if errs != nil {
-		var code int
-		if errs.Code == models.ValidationFailed {
-			code = http.StatusBadRequest
-		} else if errs.Code == models.ForeignKeyNotFound {
-			code = http.StatusNotFound
-		} else {
-			code = http.StatusInternalServerError
-		}
-
-		utils.WriteEasyjson(w, code, errs)
-		return
-	}
-
-	utils.WriteEasyjson(w, http.StatusCreated, newForum)
 }
 
 func(h *ForumHandlers) GetForumUsers(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-
-	query := r.URL.Query()
-	limitParam, err := strconv.Atoi(query.Get("limit"))
-	if err != nil {
-		limitParam = -1
+	params := mux.Vars(r)
+	slug := params["slug"]
+	queryParams := r.URL.Query()
+	var limit, since, desc string
+	if limit = queryParams.Get("limit"); limit == "" {
+		limit = "1"
 	}
-	offsetParam := query.Get("since")
-	desc := (query.Get("desc") == "true")
-
-	users, errs := h.users.GetUsersByForumSlug(vars["slug"], limitParam, offsetParam, desc)
-	if errs != nil {
-		if errs.Code == models.RowNotFound {
-			utils.WriteEasyjson(w, http.StatusNotFound, errs)
-			return
-		}
-
-		utils.WriteEasyjson(w, http.StatusInternalServerError, errs)
-		return
+	since = queryParams.Get("since");
+	// if since = queryParams.Get("since"); since == "" {
+	// 	since = "";
+	// }
+	if desc = queryParams.Get("desc"); desc == ""{
+		desc = "false"
 	}
 
-	utils.WriteEasyjson(w, http.StatusOK, users)
+	result, err := h.forums.GetForumUsersDB(slug, limit, since, desc)
+
+	switch err {
+	case nil:
+		resp, _ := swag.WriteJSON(result) // можно через easyjson, но мне лень было
+		utils.MakeResponse(w, 200, resp)
+	case models.ForumNotFound:
+		utils.MakeResponse(w, 404, []byte(utils.MakeErrorUser(slug)))
+	default:
+		utils.MakeResponse(w, 500, []byte(err.Error()))
+	}
 }

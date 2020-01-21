@@ -1,103 +1,127 @@
-CREATE EXTENSION IF NOT EXISTS CITEXT;
-DROP TABLE IF EXISTS users CASCADE;
-CREATE TABLE users
-(
-    id BIGSERIAL CONSTRAINT users_pk PRIMARY KEY,
-    nickname CITEXT NOT NULL UNIQUE
-        CONSTRAINT users_nickname_check CHECK ( nickname ~ '^[a-zA-Z0-9_.]+$' ),
-    fullname VARCHAR NOT NULL
-        CONSTRAINT users_fullname_check CHECK ( fullname <> '' ),
-    about TEXT,
-    email CITEXT NOT NULL UNIQUE
-        CONSTRAINT users_email_check
-            CHECK ( email ~ '^[a-zA-Z0-9.!#$%&''*+/=?^_` + "`" + `{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$' )
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
+
+CREATE EXTENSION IF NOT EXISTS citext;
+
+CREATE UNLOGGED TABLE IF NOT EXISTS users (
+                                              "nickname" CITEXT PRIMARY KEY,
+                                              "email"    CITEXT UNIQUE NOT NULL,
+                                              "fullname" CITEXT NOT NULL,
+                                              "about"    TEXT
 );
-DROP TABLE IF EXISTS forums CASCADE;
-CREATE TABLE forums
-(
-    id BIGSERIAL CONSTRAINT forums_pk PRIMARY KEY,
-    slug CITEXT NOT NULL UNIQUE
-        CONSTRAINT forums_slug_check CHECK ( slug ~ '^(\d|\w|-|_)*(\w|-|_)(\d|\w|-|_)*$' ),
-    title TEXT NOT NULL
-        CONSTRAINT forums_title_check CHECK ( title <> '' ),
-    posts BIGINT NOT NULL DEFAULT 0,
-    threads INTEGER NOT NULL DEFAULT 0,
-    owner CITEXT NOT NULL CONSTRAINT owner_users_fk REFERENCES users (nickname) ON DELETE CASCADE
+
+CREATE UNLOGGED TABLE IF NOT EXISTS forums (
+                                               "posts"   BIGINT  DEFAULT 0,
+                                               "slug"    CITEXT  UNIQUE NOT NULL,
+                                               "threads" INTEGER DEFAULT 0,
+                                               "title"   TEXT    NOT NULL,
+                                               "user"    CITEXT  NOT NULL REFERENCES users ("nickname")
 );
-DROP TABLE IF EXISTS threads CASCADE;
-CREATE TABLE threads
-(
-    id BIGSERIAL CONSTRAINT threads_pk PRIMARY KEY,
-    slug CITEXT UNIQUE
-        CONSTRAINT threads_slug_check CHECK ( slug ~ '^(\d|\w|-|_)*(\w|-|_)(\d|\w|-|_)*$' ),
-    title TEXT NOT NULL
-        CONSTRAINT threads_title_check CHECK ( title <> '' ),
-    message TEXT NOT NULL
-        CONSTRAINT threads_message_check CHECK ( message <> '' ),
-    votes INTEGER DEFAULT 0,
-    created TIMESTAMP WITH TIME ZONE,
-    author CITEXT NOT NULL CONSTRAINT author_users_fk REFERENCES users (nickname) ON DELETE CASCADE,
-    forum  CITEXT NOT NULL CONSTRAINT parent_forum_fk REFERENCES forums (slug) ON DELETE CASCADE,
-    CONSTRAINT uniq_thread UNIQUE (slug, author, forum)
+
+CREATE UNLOGGED TABLE IF NOT EXISTS threads (
+                                                "id"      SERIAL         PRIMARY KEY,
+                                                "author"  CITEXT         NOT NULL REFERENCES users ("nickname"),
+                                                "created" TIMESTAMPTZ(3) DEFAULT now(),
+                                                "forum"   CITEXT         NOT NULL REFERENCES forums ("slug"),
+                                                "message" TEXT           NOT NULL,
+                                                "slug"    CITEXT,
+                                                "title"   TEXT           NOT NULL,
+                                                "votes"   INTEGER        DEFAULT 0
 );
-DROP TABLE IF EXISTS posts CASCADE;
-CREATE TABLE posts
-(
-    id BIGSERIAL CONSTRAINT posts_pk PRIMARY KEY,
-    message TEXT NOT NULL
-        CONSTRAINT threads_message_check CHECK ( message <> '' ),
-    is_edited BOOLEAN NOT NULL DEFAULT false,
-    created TIMESTAMP WITH TIME ZONE NOT NULL,
-    author CITEXT NOT NULL CONSTRAINT author_users_fk REFERENCES users (nickname) ON DELETE CASCADE,
-    forum  CITEXT NOT NULL CONSTRAINT parent_forum_fk REFERENCES forums (slug) ON DELETE CASCADE,
-    thread BIGSERIAL NOT NULL CONSTRAINT thread_fk REFERENCES threads (id) ON DELETE CASCADE,
-    parent BIGINT CONSTRAINT parent_post_fk REFERENCES posts(id) ON DELETE CASCADE,
-    parents BIGINT[] NOT NULL
+
+CREATE UNLOGGED TABLE IF NOT EXISTS posts (
+                                              "id"       BIGSERIAL      PRIMARY KEY,
+                                              "author"   CITEXT         NOT NULL REFERENCES users ("nickname"),
+                                              "created"  TIMESTAMPTZ(3) DEFAULT now(),
+                                              "forum"    CITEXT         NOT NULL REFERENCES forums ("slug"),
+                                              "isEdited" BOOLEAN        DEFAULT FALSE,
+                                              "message"  TEXT           NOT NULL,
+                                              "parent"   INTEGER        DEFAULT 0,
+                                              "thread"   INTEGER        NOT NULL REFERENCES threads ("id"),
+                                              "path"     BIGINT []
 );
-DROP TABLE IF EXISTS votes CASCADE;
-CREATE TABLE votes
-(
-    author CITEXT NOT NULL CONSTRAINT author_users_fk REFERENCES users (nickname) ON DELETE CASCADE,
-    thread BIGSERIAL NOT NULL CONSTRAINT thread_fk REFERENCES threads (id) ON DELETE CASCADE,
-    is_up BOOLEAN NOT NULL,
-    CONSTRAINT vote_pk PRIMARY KEY (author, thread)
+
+CREATE UNLOGGED TABLE IF NOT EXISTS votes (
+                                              "thread"   INT NOT NULL REFERENCES threads("id"),
+                                              "voice"    INTEGER NOT NULL,
+                                              "nickname" CITEXT   NOT NULL
 );
-DROP FUNCTION IF EXISTS thread_count_increment CASCADE;
-CREATE FUNCTION thread_count_increment() RETURNS TRIGGER AS $_$
+
+
+CREATE UNLOGGED TABLE forum_users (
+                                      "forum_user"  CITEXT COLLATE ucs_basic NOT NULL,
+                                      "forum"       CITEXT NOT NULL,
+                                      "email"       TEXT NOT NULL,
+                                      "fullname"    TEXT NOT NULL,
+                                      "about"       TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fu_user ON forum_users (forum, forum_user);
+
+CREATE INDEX IF NOT EXISTS idx_threads_slug ON threads (slug);
+CREATE INDEX IF NOT EXISTS idx_threads_forum ON threads (forum);
+
+CREATE INDEX IF NOT EXISTS idx_posts_forum ON posts (forum);
+CREATE INDEX IF NOT EXISTS idx_posts_thread_path ON posts (thread, path);
+CREATE INDEX IF NOT EXISTS idx_posts_thread_id ON posts (thread, id);
+CREATE INDEX IF NOT EXISTS idx_posts_thread_id0 ON posts (thread, id) WHERE parent = 0;
+CREATE INDEX IF NOT EXISTS idx_posts_thread_id_created ON posts (id, created, thread);
+CREATE INDEX IF NOT EXISTS idx_posts_thread_path1_id ON posts (thread, (path[1]), id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_votes_thread_nickname ON votes (thread, nickname);
+
+DROP FUNCTION IF EXISTS insert_vote();
+CREATE OR REPLACE FUNCTION insert_vote() RETURNS TRIGGER AS $insert_vote$
 BEGIN
-    UPDATE forums SET threads = threads + 1 WHERE slug = new.forum;
+    UPDATE threads
+    SET votes = votes + NEW.voice
+    WHERE id = NEW.thread;
     RETURN NEW;
-END $_$ LANGUAGE 'plpgsql';
-CREATE TRIGGER thread_insert_trigger AFTER INSERT ON threads
-    FOR EACH ROW EXECUTE PROCEDURE thread_count_increment();
-DROP FUNCTION IF EXISTS post_count_increment CASCADE;
-CREATE FUNCTION post_count_increment() RETURNS TRIGGER AS $_$
+END;
+$insert_vote$
+    LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS insert_vote ON votes;
+CREATE TRIGGER insert_vote BEFORE INSERT ON votes FOR EACH ROW EXECUTE PROCEDURE insert_vote();
+
+
+DROP FUNCTION IF EXISTS update_vote();
+CREATE OR REPLACE FUNCTION update_vote() RETURNS TRIGGER AS $update_vote$
 BEGIN
-    UPDATE forums SET posts = posts + 1 WHERE slug = new.forum;
+    UPDATE threads
+    SET votes = votes - OLD.voice + NEW.voice
+    WHERE id = NEW.thread;
     RETURN NEW;
-END $_$ LANGUAGE 'plpgsql';
-CREATE TRIGGER post_insert_trigger AFTER INSERT ON posts
-    FOR EACH ROW EXECUTE PROCEDURE post_count_increment();
--- INDEX
--- FORUMS
-CREATE INDEX forums_slug_ind ON forums USING BTREE (slug);
---
--- POSTS
-CREATE INDEX posts_thread_index
-    ON posts (thread);
-CREATE INDEX posts_thread_id_index
-    ON posts (thread, id);
-CREATE INDEX ON posts (thread, id, parent)
-    WHERE parent IS NULL;
-CREATE INDEX parent_tree
-    ON posts (parents DESC, id);
---
--- THREADS
-CREATE INDEX threads_id_ind ON threads USING BTREE (id);
-CREATE INDEX threads_slug_ind ON threads USING BTREE (slug);
-CREATE INDEX threads_forum_created_ind ON threads USING BTREE (forum, created);
---
--- USERS
-CREATE INDEX users_nickname_ind ON users USING BTREE (nickname);
-CREATE INDEX users_email_ind ON users USING BTREE (email);
---
+END;
+$update_vote$
+    LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS update_vote ON votes;
+CREATE TRIGGER update_vote BEFORE UPDATE ON votes FOR EACH ROW EXECUTE PROCEDURE update_vote();
+
+
+DROP FUNCTION IF EXISTS thread_insert();
+CREATE OR REPLACE FUNCTION thread_insert() RETURNS trigger AS $thread_insert$
+BEGIN
+    UPDATE forums
+    SET threads = threads + 1
+    WHERE slug = NEW.forum;
+    RETURN NULL;
+END;
+$thread_insert$ LANGUAGE plpgsql;
+DROP trigger if exists thread_insert ON threads;
+CREATE TRIGGER thread_insert AFTER INSERT ON threads
+    FOR EACH ROW EXECUTE PROCEDURE thread_insert();
+
+DROP FUNCTION IF EXISTS add_forum_user();
+CREATE OR REPLACE FUNCTION add_forum_user() RETURNS TRIGGER AS $add_forum_user$
+BEGIN
+    INSERT INTO forum_users ("forum_user", "forum", "email", "fullname", "about")
+    SELECT nickname, NEW.forum, email, fullname, about
+    FROM users
+    WHERE nickname = NEW.author
+    ON CONFLICT DO NOTHING;
+    RETURN NULL;
+END;
+$add_forum_user$
+    LANGUAGE plpgsql;
+
+CREATE TRIGGER add_forum_user AFTER INSERT ON threads FOR EACH ROW EXECUTE PROCEDURE add_forum_user();

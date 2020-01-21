@@ -1,270 +1,437 @@
 package repository
 
 import (
+	"fmt"
 	"github.com/AntonPriyma/db_forum/models"
 	"github.com/jackc/pgx"
 	"strconv"
-	"strings"
-	"time"
 )
 
 type ThreadDBRepository interface {
-	Create(thread *models.Thread) (*models.Thread,*models.Error)
-	Update(thread *models.Thread) *models.Error
-	VoteBySlug(slug string, voice *models.Vote) (*models.Thread, *models.Error)
-	VoteByID(id int64, voice *models.Vote) (*models.Thread,  *models.Error)
-	vote(thread *models.Thread,voice *models.Vote)  *models.Error
-	GetThreadsByForum(forumSlug string, limit int, since time.Time, desc bool) (models.Threads,  *models.Error)
-	GetThreadByID(id int64) (*models.Thread, *models.Error)
-	GetThreadBySlug(slug *string) (*models.Thread,  *models.Error)
+	Create(thread *models.Thread) (*models.Thread,error) // ok
+	UpdateThreadDB(thread *models.ThreadUpdate, param string) (*models.Thread, error) //ok
+	MakeThreadVoteDB(vote *models.Vote, param string) (*models.Thread, error) //ok
+	GetThreadsByForum(slug, limit, since, desc string) (*models.Threads, error) //ok
+	GetThread(param string) (*models.Thread, error) //ok
+	parentExitsInOtherThread(parent int64, threadID int32) bool
+	parentNotExists(parent int64) bool
+}
+
+func(p *ThreadDBRepositoryImpl) parentExitsInOtherThread(parent int64, threadID int32) bool {
+	var t int64
+	err := p.db.QueryRow(postID, parent, threadID).Scan(&t)
+
+	if err != nil && err.Error() == models.NoRowsInResult {
+		return false
+	}
+	return true
+}
+
+func(p *ThreadDBRepositoryImpl) parentNotExists(parent int64) bool {
+	if parent == 0 {
+		return false
+	}
+
+	var t int64
+	err := p.db.QueryRow(`SELECT id FROM posts WHERE id = $1`, parent).Scan(&t)
+
+	if err != nil {
+		return true
+	}
+	return false
+}
+
+const (
+	getThreadSlugSQL = `
+		SELECT id, title, author, forum, message, votes, slug, created
+		FROM threads
+		WHERE slug = $1
+	`
+	getThreadIdSQL = `
+		SELECT id, title, author, forum, message, votes, slug, created
+		FROM threads
+		WHERE id = $1
+	`
+	updateThreadSQL = `
+		UPDATE threads
+		SET title = coalesce(nullif($2, ''), title),
+			message = coalesce(nullif($3, ''), message)
+		WHERE slug = $1
+		RETURNING id, title, author, forum, message, votes, slug, created
+	`
+
+	// getThreadPosts
+	getPostsSienceDescLimitTreeSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts
+		WHERE thread = $1 AND (path < (SELECT path FROM posts WHERE id = $2::TEXT::INTEGER))
+		ORDER BY path DESC
+		LIMIT $3::TEXT::INTEGER
+	`
+
+	getPostsSienceDescLimitParentTreeSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts p
+		WHERE p.thread = $1 and p.path[1] IN (
+			SELECT p2.path[1]
+			FROM posts p2
+			WHERE p2.thread = $1 AND p2.parent = 0 and p2.path[1] < (SELECT p3.path[1] from posts p3 where p3.id = $2)
+			ORDER BY p2.path DESC
+			LIMIT $3
+		)
+		ORDER BY p.path[1] DESC, p.path[2:]
+	`
+
+	getPostsSienceDescLimitFlatSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts
+		WHERE thread = $1 AND id < $2::TEXT::INTEGER
+		ORDER BY id DESC
+		LIMIT $3::TEXT::INTEGER
+	`
+
+	getPostsSienceLimitTreeSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts
+		WHERE thread = $1 AND (path > (SELECT path FROM posts WHERE id = $2::TEXT::INTEGER))
+		ORDER BY path
+		LIMIT $3::TEXT::INTEGER
+	`
+
+	getPostsSienceLimitParentTreeSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts p
+		WHERE p.thread = $1 and p.path[1] IN (
+			SELECT p2.path[1]
+			FROM posts p2
+			WHERE p2.thread = $1 AND p2.parent = 0 and p2.path[1] > (SELECT p3.path[1] from posts p3 where p3.id = $2::TEXT::INTEGER)
+			ORDER BY p2.path
+			LIMIT $3::TEXT::INTEGER
+		)
+		ORDER BY p.path
+	`
+	getPostsSienceLimitFlatSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts
+		WHERE thread = $1 AND id > $2::TEXT::INTEGER
+		ORDER BY id
+		LIMIT $3::TEXT::INTEGER
+	`
+	// without sience
+	getPostsDescLimitTreeSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts
+		WHERE thread = $1 
+		ORDER BY path DESC
+		LIMIT $2::TEXT::INTEGER
+	`
+	getPostsDescLimitParentTreeSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts
+		WHERE thread = $1 AND path[1] IN (
+			SELECT path[1]
+			FROM posts
+			WHERE thread = $1
+			GROUP BY path[1]
+			ORDER BY path[1] DESC
+			LIMIT $2::TEXT::INTEGER
+		)
+		ORDER BY path[1] DESC, path
+	`
+	getPostsDescLimitFlatSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts
+		WHERE thread = $1
+		ORDER BY id DESC
+		LIMIT $2::TEXT::INTEGER
+	`
+	getPostsLimitTreeSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts
+		WHERE thread = $1 
+		ORDER BY path
+		LIMIT $2::TEXT::INTEGER
+	`
+	getPostsLimitParentTreeSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts
+		WHERE thread = $1 AND path[1] IN (
+			SELECT path[1] 
+			FROM posts 
+			WHERE thread = $1 
+			GROUP BY path[1]
+			ORDER BY path[1]
+			LIMIT $2::TEXT::INTEGER
+		)
+		ORDER BY path
+	`
+	getPostsLimitFlatSQL = `
+		SELECT id, author, parent, message, forum, thread, created
+		FROM posts
+		WHERE thread = $1 
+		ORDER BY id
+		LIMIT $2::TEXT::INTEGER
+	`
+	// ThreadVote
+	getThreadVoteByIDSQL = `
+		SELECT votes.voice, threads.id, threads.votes, u.nickname
+		FROM (SELECT 1) s
+		LEFT JOIN threads ON threads.id = $1
+		LEFT JOIN "users" u ON u.nickname = $2
+		LEFT JOIN votes ON threads.id = votes.thread AND u.nickname = votes.nickname
+	`
+	getThreadVoteBySlugSQL = `
+		SELECT votes.voice, threads.id, threads.votes, u.nickname
+		FROM (SELECT 1) s
+		LEFT JOIN threads ON threads.slug = $1
+		LEFT JOIN users as u ON u.nickname = $2
+		LEFT JOIN votes ON threads.id = votes.thread AND u.nickname = votes.nickname
+	`
+	insertVoteSQL = `
+		INSERT INTO votes (thread, nickname, voice) 
+		VALUES ($1, $2, $3)
+	`
+	updateVoteSQL = `
+		UPDATE votes 
+		SET voice = $3
+		WHERE thread = $1 AND nickname = $2
+	`
+	updateThreadVotesSQL = `
+		UPDATE threads 
+		SET	votes = $1
+		WHERE id = $2
+		RETURNING author, created, forum, "message", slug, title, id, votes
+	`
+)
+
+func isNumber(s string) bool {
+	if _, err := strconv.Atoi(s); err == nil {
+		return true
+	}
+	return false
 }
 
 type ThreadDBRepositoryImpl struct{
 	db *pgx.ConnPool
+	forums ForumRepository
 }
 
-func (t *ThreadDBRepositoryImpl) Create(thread *models.Thread) (*models.Thread, *models.Error) {
-	if validateError := thread.Validate(); validateError != nil {
-		return nil, validateError
-	}
+func (t *ThreadDBRepositoryImpl) MakeThreadVoteDB(vote *models.Vote, param string) (*models.Thread, error) {
+	var err error
 
-	tx, err := t.db.Begin()
-	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, "can not open 'thread create' transaction")
+	tx, txErr := t.db.Begin()
+	if txErr != nil {
+		return nil, txErr
 	}
 	defer tx.Rollback()
 
-	duplicate, _ := t.GetThreadBySlug(thread.Slug)
-	if duplicate != nil {
-		return duplicate, nil
-	}
-
-	newRow, err := tx.Query(`INSERT INTO threads (slug, title, message, created, author, forum)  VALUES ($1, $2, $3, $4, $5, (SELECT slug FROM forums WHERE slug = $6)) RETURNING id, forum`,
-		thread.Slug, thread.Title, thread.Message, thread.Created, thread.Author, thread.Forum)
-	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, err.Error())
-	}
-	if !newRow.Next() {
-		if pgerr, ok := newRow.Err().(pgx.PgError); ok && (pgerr.Code == "23502" || pgerr.Code == "23503") {
-			return nil, models.NewError(models.ForeignKeyNotFound, pgerr.Error())
-		}
-
-		return nil, models.NewError(models.InternalDatabase, newRow.Err().Error())
-	}
-	if err = newRow.Scan(&thread.ID, &thread.Forum); err != nil {
-		return nil, models.NewError(models.InternalDatabase, err.Error())
-	}
-
-	newRow.Close()
-
-	if err = tx.Commit(); err != nil {
-		return nil, models.NewError(models.InternalDatabase, "thread create transaction commit error")
-	}
-
-	return nil, nil
-}
-
-func (t *ThreadDBRepositoryImpl) Update(threadInput *models.Thread) *models.Error {
-	tx, err := t.db.Begin()
-	if err != nil {
-		return models.NewError(models.InternalDatabase, "can not open 'thread update' transaction")
-	}
-	defer tx.Rollback()
-
-	var thread *models.Thread
-	if threadInput.Slug == nil {
-		thread, _ = t.GetThreadByID(threadInput.ID)
+	var thread models.Thread
+	if isNumber(param) {
+		id, _ := strconv.Atoi(param)
+		err = tx.QueryRow(`SELECT id, author, created, forum, message, slug, title, votes FROM threads WHERE id = $1`, id).Scan(
+			&thread.ID,
+			&thread.Author,
+			&thread.Created,
+			&thread.Forum,
+			&thread.Message,
+			&thread.Slug,
+			&thread.Title,
+			&thread.Votes,
+		)
 	} else {
-		thread, _ = t.GetThreadBySlug(threadInput.Slug)
+		err = tx.QueryRow(`SELECT id, author, created, forum, message, slug, title, votes FROM threads WHERE slug = $1`, param).Scan(
+			&thread.ID,
+			&thread.Author,
+			&thread.Created,
+			&thread.Forum,
+			&thread.Message,
+			&thread.Slug,
+			&thread.Title,
+			&thread.Votes,
+		)
 	}
-	if thread == nil {
-		return models.NewError(models.RowNotFound, "can not find thread with this fields")
-	}
-
-	needsUpdate := false
-	if threadInput.Message != "" && threadInput.Message != thread.Message {
-		needsUpdate = true
-		thread.Message = threadInput.Message
-	}
-	if threadInput.Title != "" && threadInput.Title != thread.Title {
-		needsUpdate = true
-		thread.Title = threadInput.Title
-	}
-	*threadInput = *thread
-
-	// нечего обновлять
-	if !needsUpdate {
-		return nil
-	}
-
-	_, err = tx.Exec(`UPDATE threads SET (message, title) = ($1, $2) WHERE id = $3`, threadInput.Message, threadInput.Title, threadInput.ID)
 	if err != nil {
-		return models.NewError(models.InternalDatabase, err.Error())
+		return nil, models.ForumNotFound
 	}
 
-	if err = tx.Commit(); err != nil {
-		return models.NewError(models.InternalDatabase, "thread update transaction commit error")
-	}
-
-	return nil
-}
-
-func (t *ThreadDBRepositoryImpl) VoteBySlug(slug string, voice *models.Vote) (*models.Thread, *models.Error) {
-	voice.VoiceImpl = (voice.Voice == 1)
-
-	tx, err := t.db.Begin()
+	var nick string
+	err = tx.QueryRow(`SELECT nickname FROM users WHERE nickname = $1`, vote.Nickname).Scan(&nick)
 	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, "can not open 'thread vode' transaction")
-	}
-	defer tx.Rollback()
-
-	thread, _ := t.GetThreadBySlug(&slug)
-	if thread == nil {
-		return nil, models.NewError(models.RowNotFound, "no thread with this slug")
+		return nil, models.UserNotFound
 	}
 
-	voteError := t.vote(thread,voice)
-	if voteError != nil {
-		return nil, voteError
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, "vote transaction commit error")
-	}
-
-	return thread, nil
-}
-
-func (t *ThreadDBRepositoryImpl) VoteByID(id int64, voice *models.Vote) (*models.Thread, *models.Error) {
-	voice.VoiceImpl = (voice.Voice == 1)
-
-	tx, err := t.db.Begin()
-	if err != nil {
-		return nil,models.NewError(models.InternalDatabase, "can not open 'thread vode' transaction")
-	}
-	defer tx.Rollback()
-
-	//formatedID := strconv.FormatInt(id, 10)
-	thread, _ := t.GetThreadByID(id)
-	if thread == nil {
-		return nil, models.NewError(models.RowNotFound, "no thread with this slug")
-	}
-
-	voteError := t.vote(thread, voice)
-	if voteError != nil {
-		return nil, voteError
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, "vote transaction commit error")
-	}
-
-	return thread, nil
-}
-
-func (t *ThreadDBRepositoryImpl) vote(thread *models.Thread, voice *models.Vote) *models.Error {
-	// чтобы далее понять, обновилось ли что-то
-	oldVotes := thread.Votes
-
-	var isUp bool
-	row := t.db.QueryRow(`SELECT v.is_up FROM votes v WHERE author = $1 AND thread = $2`, voice.Nickname, thread.ID)
-	if err := row.Scan(&isUp); err == nil {
-		// нужно обновить
-		if isUp != voice.VoiceImpl {
-			_, err = t.db.Exec(`UPDATE votes SET is_up = $1 WHERE author = $2 AND thread = $3`, voice.VoiceImpl, voice.Nickname, thread.ID)
-			if err != nil {
-				return models.NewError(models.InternalDatabase, err.Error())
-			}
-
-			// затираем старый + добавили новый
-			thread.Votes += 2 * int32(voice.Voice)
-		}
-	} else if err == pgx.ErrNoRows {
-		_, err = t.db.Exec(`INSERT INTO votes (author, thread, is_up) VALUES ($1, $2, $3)`, voice.Nickname, thread.ID, voice.VoiceImpl)
+	rows, err := tx.Exec(`UPDATE votes SET voice = $1 WHERE thread = $2 AND nickname = $3;`, vote.Voice, thread.ID, vote.Nickname)
+	if rows.RowsAffected() == 0 {
+		_, err := tx.Exec(`INSERT INTO votes (nickname, thread, voice) VALUES ($1, $2, $3);`, vote.Nickname, thread.ID, vote.Voice)
 		if err != nil {
-			if pgerr, ok := err.(pgx.PgError); ok && pgerr.Code == "23503" {
-				return models.NewError(models.ForeignKeyNotFound, pgerr.Error())
-			}
-
-			return models.NewError(models.InternalDatabase, err.Error())
+			return nil, models.UserNotFound
 		}
+	}
+	// если возник вопрос - в какой мемент делаем +1 к voice -> смотри init.sql
 
-		thread.Votes += int32(voice.Voice)
+	err = tx.QueryRow(`SELECT votes FROM threads WHERE id = $1`, thread.ID).Scan(&thread.Votes)
+	if err != nil {
+		return nil, err
+	}
+
+	tx.Commit()
+
+	return &thread, nil
+}
+
+func (t *ThreadDBRepositoryImpl) GetThread(param string) (*models.Thread, error) {
+	var err error
+	var thread models.Thread
+
+	if isNumber(param) {
+		id, _ := strconv.Atoi(param)
+		err = t.db.QueryRow(
+			getThreadIdSQL,
+			id,
+		).Scan(
+			&thread.ID,
+			&thread.Title,
+			&thread.Author,
+			&thread.Forum,
+			&thread.Message,
+			&thread.Votes,
+			&thread.Slug,
+			&thread.Created,
+		)
 	} else {
-		return models.NewError(models.InternalDatabase, err.Error())
+		err = t.db.QueryRow(
+			getThreadSlugSQL,
+			param,
+		).Scan(
+			&thread.ID,
+			&thread.Title,
+			&thread.Author,
+			&thread.Forum,
+			&thread.Message,
+			&thread.Votes,
+			&thread.Slug,
+			&thread.Created,
+		)
 	}
 
-	if oldVotes != thread.Votes {
-		_, err := t.db.Exec(`UPDATE threads SET votes = $1 WHERE id = $2`, thread.Votes, thread.ID)
-		if err != nil {
-			return models.NewError(models.InternalDatabase, err.Error())
-		}
+	if err != nil {
+		return nil, models.ThreadNotFound
 	}
 
-	return nil
+	return &thread, nil
 }
 
-func (t *ThreadDBRepositoryImpl) GetThreadsByForum(forumSlug string, limit int, since time.Time, desc bool) (models.Threads, *models.Error) {
-	query := strings.Builder{}
-	args := []interface{}{forumSlug}
-	query.WriteString(`SELECT t.id, t.slug, t.title, t.message, t.votes, t.created,
-						t.author, t.forum FROM threads t WHERE forum = $1`)
-	if !since.IsZero() {
-		query.WriteString(" AND created")
-		if desc {
-			query.WriteString(" <=")
-		} else {
-			query.WriteString(" >=")
+func (t *ThreadDBRepositoryImpl) Create(thread *models.Thread) (*models.Thread, error) {
+	if thread.Slug != "" {
+		thread, err := t.GetThread(thread.Slug)
+		if err == nil {
+			return thread, models.ThreadIsExist
 		}
-		query.WriteString(" $2")
-		args = append(args, since)
 	}
-	query.WriteString(" ORDER BY t.created")
-	if desc {
-		query.WriteString(" DESC")
-	}
-	if limit != -1 {
-		query.WriteString(" LIMIT $")
-		query.WriteString(strconv.Itoa(len(args) + 1))
-		args = append(args, limit)
-	}
-	query.WriteByte(';')
 
-	tx, err := t.db.Begin()
+
+	err := t.db.QueryRow(
+		createForumThreadSQL,
+		&thread.Author,
+		&thread.Created,
+		&thread.Message,
+		&thread.Title,
+		&thread.Slug,
+		&thread.Forum,
+	).Scan(
+		&thread.Author,
+		&thread.Created,
+		&thread.Forum,
+		&thread.ID,
+		&thread.Message,
+		&thread.Title,
+	)
+
+	fmt.Println(thread.ID, err)
+
+	switch ErrorCode(err) {
+	case models.PgxOK:
+		return thread, nil
+	case models.PgxErrNotNull:
+		return nil, models.ForumOrAuthorNotFound //UserNotFound
+	case models.PgxErrForeignKey:
+		return nil, models.ForumOrAuthorNotFound //ForumIsExist
+	default:
+		return nil, err
+	}
+}
+
+func (t *ThreadDBRepositoryImpl) UpdateThreadDB(thread *models.ThreadUpdate, param string) (*models.Thread, error) {
+	threadFound, err := t.GetThread(param)
 	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, "can not open 'thread get' transaction")
+		return nil, models.PostNotFound
 	}
-	defer tx.Rollback()
 
-	forum, _ := getForumBySlugImpl(tx, forumSlug)
-	if forum == nil {
-		return nil, models.NewError(models.RowNotFound, "no threads for this forum")
-	}
-	rows, err := tx.Query(query.String(), args...)
+	updatedThread := models.Thread{}
+
+	err = t.db.QueryRow(updateThreadSQL,
+		&threadFound.Slug,
+		&thread.Title,
+		&thread.Message,
+	).Scan(
+		&updatedThread.ID,
+		&updatedThread.Title,
+		&updatedThread.Author,
+		&updatedThread.Forum,
+		&updatedThread.Message,
+		&updatedThread.Votes,
+		&updatedThread.Slug,
+		&updatedThread.Created,
+	)
+
 	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, err.Error())
+		return nil, err
 	}
 
-	threads := make([]*models.Thread, 0)
+	return &updatedThread, nil
+}
+
+
+func (t *ThreadDBRepositoryImpl) GetThreadsByForum(slug, limit, since, desc string) (*models.Threads, error) {
+	var rows *pgx.Rows
+	var err error
+
+	if since != "" {
+		query := QueryForumWithSince[desc]
+		rows, err = t.db.Query(query, slug, since, limit)
+	} else {
+		query := QueryForumNoSince[desc]
+		rows, err = t.db.Query(query, slug, limit)
+	}
+	defer rows.Close()
+
+	if err != nil {
+		return nil, models.ForumNotFound
+	}
+
+	threads := models.Threads{}
 	for rows.Next() {
-		t := &models.Thread{}
-		err = rows.Scan(&t.ID, &t.Slug,
-			&t.Title, &t.Message, &t.Votes,
-			&t.Created, &t.Author, &t.Forum)
+		t := models.Thread{}
+		err = rows.Scan(
+			&t.Author,
+			&t.Created,
+			&t.Forum,
+			&t.ID,
+			&t.Message,
+			&t.Slug,
+			&t.Title,
+			&t.Votes,
+		)
+		threads = append(threads, &t)
+	}
+
+	if len(threads) == 0 {
+		_, err := t.forums.GetForumBySlug(slug)
 		if err != nil {
-			return nil, models.NewError(models.InternalDatabase, err.Error())
+			return nil, models.ForumNotFound
 		}
-		threads = append(threads, t)
 	}
-	rows.Close()
-
-	if err = tx.Commit(); err != nil {
-		return nil, models.NewError(models.InternalDatabase, err.Error())
-	}
-
-	return threads, nil
+	return &threads, nil
 }
 
 func (t *ThreadDBRepositoryImpl) GetThreadByID(id int64) (*models.Thread, *models.Error) {
@@ -285,25 +452,15 @@ func (t *ThreadDBRepositoryImpl) GetThreadByID(id int64) (*models.Thread, *model
 	return thread, nil
 }
 
-func (t *ThreadDBRepositoryImpl) GetThreadBySlug(slug *string) (*models.Thread, *models.Error) {
-	thread := &models.Thread{}
-	// спринтф затратно, потом надо это ускорить
-	row := t.db.QueryRow(`SELECT thread.id, thread.slug, thread.title, thread.message, thread.votes, thread.created,
-									thread.author, thread.forum FROM threads thread WHERE slug = $1`, slug)
-	if err := row.Scan(&thread.ID, &thread.Slug,
-		&thread.Title, &thread.Message, &thread.Votes,
-		&thread.Created, &thread.Author, &thread.Forum); err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, models.NewError(models.RowNotFound, "row does not found")
-		}
+const postID = `
+	SELECT id
+	FROM posts
+	WHERE id = $1 AND thread IN (SELECT id FROM threads WHERE thread <> $2)
+`
 
-		return nil, models.NewError(models.InternalDatabase, err.Error())
-	}
 
-	return thread, nil
-}
 
-func NewThreadDBRepositoryImpl(db *pgx.ConnPool) ThreadDBRepository {
-	return &ThreadDBRepositoryImpl{db: db}
+func NewThreadDBRepositoryImpl(db *pgx.ConnPool, forums ForumRepository) ThreadDBRepository {
+	return &ThreadDBRepositoryImpl{db: db,forums:forums}
 }
 

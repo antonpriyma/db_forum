@@ -1,13 +1,13 @@
 package repository
 
 import (
+	"fmt"
 	"github.com/AntonPriyma/db_forum/models"
 	"github.com/jackc/pgx"
 	"strconv"
 	"strings"
 	"time"
 )
-
 
 type SortMode int
 
@@ -17,373 +17,277 @@ const (
 	ParentTree
 )
 
+const (
+	getPostSQL = `
+		SELECT id, author, message, forum, thread, created, "isEdited", parent
+		FROM posts 
+		WHERE id = $1
+	`
+	updatePostSQL = `
+		UPDATE posts 
+		SET message = COALESCE($2, message), "isEdited" = ($2 IS NOT NULL AND $2 <> message) 
+		WHERE id = $1 
+		RETURNING author::text, created, forum, "isEdited", thread, message, parent
+	`
+)
+
 type PostRepository interface {
-	Create(ps models.Posts,slugOrID interface{}) *models.Error
-	Update(post *models.Post) *models.Error
-	GetPostByID(id int64, scope []string) (*models.PostFull, *models.Error)
-	GetPostsByThreadID(threadID int64, limit int, since int64, mode SortMode, desc bool) (models.Posts, *models.Error)
-	GetPostsByThreadSlug(slug string, limit int, since int64, mode SortMode, desc bool) (models.Posts, *models.Error)
+	Create(posts *models.Posts, param string) (*models.Posts, error)
+	Update(postUpdate *models.PostUpdate, id int) (*models.Post, error)
+	GetPostByID(id int, related []string) (*models.PostFull, error)
+	GetThreadPostsDB(param, limit, since, sort, desc string) (*models.Posts, error)
 }
 
 type PostDBRepositoryImpl struct {
-	users UsersRepository
+	users  UsersRepository
 	thread ThreadDBRepository
-	db *pgx.ConnPool
+	forum ForumRepository
+	db     *pgx.ConnPool
 }
 
-func NewPostDBRepositoryImpl(users UsersRepository, thread ThreadDBRepository, db *pgx.ConnPool) PostRepository {
-	return &PostDBRepositoryImpl{users: users, thread: thread, db: db}
-}
-
-func (p *PostDBRepositoryImpl) Create(ps models.Posts,slugOrID interface{}) *models.Error {
-	tx, err := p.db.Begin()
-	if err != nil {
-		return models.NewError(models.InternalDatabase, "can not open posts create tx")
+func(p *PostDBRepositoryImpl) checkPost(post *models.Post, t *models.Thread) error {
+	if p.users.authorExists(post.Author) {
+		return models.UserNotFound
 	}
-	defer tx.Rollback()
-
-	var thread *models.Thread
-	switch v := slugOrID.(type) {
-	case int64:
-		thread, _ = p.thread.GetThreadByID(v)
-	case string:
-		thread, _ = p.thread.GetThreadBySlug(&v)
+	if p.thread.parentExitsInOtherThread(post.Parent, t.ID) || p.thread.parentNotExists(post.Parent) {
+		return models.PostParentNotFound
 	}
-	if thread == nil {
-		return models.NewError(models.ForeignKeyNotFound, "thread not found")
-	}
-
-	var createError *models.Error
-	for _, post := range ps {
-		createError = p.createImpl(post, thread)
-		if createError != nil {
-			return createError
-		}
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return models.NewError(models.InternalDatabase, "con not commit posts create tx")
-	}
-
 	return nil
 }
 
-func (r *PostDBRepositoryImpl) createImpl(p *models.Post,thread *models.Thread) *models.Error {
-	if validateError := p.Validate(); validateError != nil {
-		return validateError
-	}
-
-	p.Forum = thread.Forum // можно убрать поле форум в табоице posts
-	p.Thread = thread.ID
-
-	if p.Parent != 0 {
-		p.ParentImpl = &p.Parent
-		row := r.db.QueryRow(`SELECT p.thread FROM posts p WHERE p.id = $1;`, p.ParentImpl)
-
-		var parentThread int64
-		if err := row.Scan(&parentThread); err != nil || parentThread != p.Thread {
-			return models.NewError(models.ForeignKeyConflict, "Parent post was created in another thread")
-		}
-	}
-
-	if p.Created.IsZero() {
-		p.Created = time.Now()
-	}
-
-	// PostgreSQL считает с точностью до MS
-	p.Created = p.Created.Round(time.Millisecond)
-	newRow, err := r.db.Query(`INSERT INTO posts (message, created, author, forum, thread, parent, parents)
-	VALUES ($1, $2, $3, $4, $5, $6, (SELECT parents FROM posts WHERE posts.id = $6) || (SELECT currval('posts_id_seq'))) RETURNING id`,
-		p.Message, p.Created, p.Author, p.Forum, p.Thread, p.ParentImpl)
+func (p *PostDBRepositoryImpl) Create(posts *models.Posts, param string) (*models.Posts, error) {
+	thread, err := p.thread.GetThread(param)
 	if err != nil {
-		return models.NewError(models.InternalDatabase, err.Error())
-	}
-	if !newRow.Next() {
-		if pgerr, ok := newRow.Err().(pgx.PgError); ok && pgerr.Code == "23503" {
-			return models.NewError(models.ForeignKeyNotFound, pgerr.Error())
-		}
-
-		return models.NewError(models.InternalDatabase, newRow.Err().Error())
-	}
-	// обновляем структуру, чтобы она содержала валидное имя создателя(учитывая регистр)
-	// и валидный ID
-	if err = newRow.Scan(&p.ID); err != nil {
-		return models.NewError(models.InternalDatabase, err.Error())
-	}
-	newRow.Close()
-
-	return nil
-}
-
-func (p *PostDBRepositoryImpl) Update(post *models.Post) *models.Error {
-	tx, err := p.db.Begin()
-	if err != nil {
-		return models.NewError(models.InternalDatabase, "can not open 'thread update' transaction")
-	}
-	defer tx.Rollback()
-
-	storedPost := &models.Post{}
-	row := tx.QueryRow(`SELECT p.id, p.message, p.is_edited, p.created, p.author, p.forum, p.thread, p.parent FROM posts p WHERE p.id = $1;`,
-		post.ID)
-	if err := row.Scan(&storedPost.ID, &storedPost.Message,
-		&storedPost.IsEdited, &storedPost.Created, &storedPost.Author,
-		&storedPost.Forum, &storedPost.Thread, &storedPost.ParentImpl); err != nil {
-		if err == pgx.ErrNoRows {
-			return models.NewError(models.RowNotFound, err.Error())
-		}
-
-		return models.NewError(models.InternalDatabase, err.Error())
-	}
-	if storedPost.ParentImpl == nil {
-		storedPost.Parent = 0
-	} else {
-		storedPost.Parent = *storedPost.ParentImpl
+		return nil, err
 	}
 
-	needsUpdate := false
-	if post.Message != "" && storedPost.Message != post.Message {
-		needsUpdate = true
-		storedPost.Message = post.Message
-		storedPost.IsEdited = true
-	}
-	*post = *storedPost
-
-	if !needsUpdate {
-		return nil
+	postsNumber := len(*posts)
+	if postsNumber == 0 {
+		return posts, nil
 	}
 
-	_, err = tx.Exec(`UPDATE posts SET (message, is_edited) = ($1, $2) WHERE id = $3`, post.Message, post.IsEdited, post.ID)
-	if err != nil {
-		return models.NewError(models.InternalDatabase, err.Error())
-	}
-
-	if err = tx.Commit(); err != nil {
-		return models.NewError(models.InternalDatabase, "thread update transaction commit error")
-	}
-
-	return nil
-}
-
-func (p *PostDBRepositoryImpl) GetPostByID(id int64, scope []string) (*models.PostFull, *models.Error) {
-	tx, err := p.db.Begin()
-	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, err.Error())
-	}
-	defer tx.Rollback()
-
-	pf := &models.PostFull{}
-	var getErr *models.Error
-
-	pf.Post, getErr = p.getPostByIDImpl(id)
-	if getErr != nil {
-		return nil, getErr
-	}
-
-	for _, sc := range scope {
-		switch sc {
-		case "user":
-			pf.Author, getErr = p.users.GetUserByNickname(pf.Post.Author)
-		case "forum":
-			pf.Forum, getErr = getForumBySlugImpl(tx, pf.Post.Forum)
-		case "thread":
-			pf.Thread, getErr = p.thread.GetThreadByID(pf.Post.Thread)
-		}
-		if getErr != nil {
-			return nil, getErr
-		}
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, err.Error())
-	}
-	return pf, nil
-}
-
-func (p *PostDBRepositoryImpl) GetPostsByThreadID(threadID int64, limit int, since int64, mode SortMode, desc bool) (models.Posts, *models.Error) {
-	tx, err := p.db.Begin()
-	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, "get posts trans open error")
-	}
-	defer tx.Rollback()
-
-	res, getError := p.getPostsByThreadIDImpl(threadID, limit, since, mode, desc)
-	if getError != nil {
-		return nil, getError
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, "get posts trans commit error")
-	}
-
-	return res, nil
-}
-
-func (p *PostDBRepositoryImpl) GetPostsByThreadSlug(slug string, limit int, since int64, mode SortMode, desc bool) (models.Posts, *models.Error) {
-	tx, err := p.db.Begin()
-	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, "get posts trans open error")
-	}
-	defer tx.Rollback()
-
-	thread, _ := p.thread.GetThreadBySlug(&slug)
-	if thread == nil {
-		return nil, models.NewError(models.RowNotFound, "thread not exists")
-	}
-
-	res, getError := p.getPostsByThreadIDImpl(thread.ID, limit, since, mode, desc)
-	if getError != nil {
-		return nil, getError
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, "get posts trans commit error")
-	}
-
-	return res, nil
-}
-
-
-func (p *PostDBRepositoryImpl) getPostsByThreadIDImpl(threadID int64, limit int, since int64, mode SortMode, desc bool) (models.Posts,*models.Error) {
+	dateTimeTemplate := "2006-01-02 15:04:05"
+	created := time.Now().Format(dateTimeTemplate)
 	query := strings.Builder{}
-	args := []interface{}{}
-	switch mode {
-	case Flat:
-		args = append(args, threadID)
-		query.WriteString(`SELECT p.id, p.message, p.is_edited, p.created, p.author,
-						 p.forum, p.thread, p.parent FROM posts p WHERE p.thread = $1`)
-		if since != 0 {
-			args = append(args, since)
-			query.WriteString(` AND (p.created, p.id) `)
-			if desc {
-				query.WriteByte('<')
-			} else {
-				query.WriteByte('>')
-			}
-			query.WriteString(` (SELECT posts.created, posts.id FROM posts WHERE posts.id=$2)`)
-		}
-		query.WriteString(` ORDER BY (p.created, p.id)`)
-		if desc {
-			query.WriteString(" DESC")
-		}
-		if limit != -1 {
-			query.WriteString(" LIMIT $")
-			query.WriteString(strconv.Itoa(len(args) + 1))
-			args = append(args, limit)
-		}
-	case Tree:
-		args = append(args, threadID)
-		query.WriteString(`SELECT p.id, p.message, p.is_edited, p.created, p.author,
-			p.forum, p.thread, p.parent FROM posts p WHERE p.thread = $1`)
-		if since != 0 {
-			args = append(args, since)
-			query.WriteString(" AND p.parents ")
-			if desc {
-				query.WriteByte('<')
-			} else {
-				query.WriteByte('>')
-			}
-			query.WriteString(` (SELECT posts.parents FROM posts WHERE posts.id = $2)`)
-		}
-		query.WriteString(" ORDER BY p.parents")
-		if desc {
-			query.WriteString(" DESC")
-		}
-		if limit != -1 {
-			query.WriteString(" LIMIT $")
-			query.WriteString(strconv.Itoa(len(args) + 1))
-			args = append(args, limit)
-		}
-	case ParentTree:
-		args = append(args, threadID)
-		query.WriteString(`SELECT p.id, p.message, p.is_edited, p.created, p.author,
-			p.forum, p.thread, p.parent FROM posts p WHERE p.parents[1] IN (
-				SELECT posts.id FROM posts WHERE posts.thread = $1 AND posts.parent IS NULL`)
-		if since != 0 {
-			args = append(args, since)
-			query.WriteString(` AND posts.id`)
-			if desc {
-				query.WriteByte('<')
-			} else {
-				query.WriteByte('>')
-			}
-			query.WriteString(` (SELECT COALESCE(posts.parents[1], posts.id) FROM posts WHERE posts.id = $2)`)
-		}
-		query.WriteString(" ORDER BY posts.id")
-		if desc {
-			query.WriteString(" DESC")
-		}
-		if limit != -1 {
-			query.WriteString(" LIMIT $")
-			query.WriteString(strconv.Itoa(len(args) + 1))
-			args = append(args, limit)
-		}
-		query.WriteString(`) ORDER BY`)
-		if desc {
-			query.WriteString(` p.parents[1] DESC,`)
-		}
-		query.WriteString(` p.parents`)
-	}
-	query.WriteByte(';')
-
-
-	thread, _ := p.thread.GetThreadByID(threadID)
-	if thread == nil {
-		return nil, models.NewError(models.RowNotFound, "no posts for this thread")
-	}
-
-	rows, err := p.db.Query(query.String(), args...)
-	if err != nil {
-		return nil, models.NewError(models.InternalDatabase, err.Error())
-	}
-
-	posts := make([]*models.Post, 0)
-	for rows.Next() {
-		p := &models.Post{}
-		err = rows.Scan(&p.ID, &p.Message,
-			&p.IsEdited, &p.Created, &p.Author,
-			&p.Forum, &p.Thread, &p.ParentImpl)
+	query.WriteString("INSERT INTO posts (author, created, message, thread, parent, forum, path) VALUES ")
+	queryBody := "('%s', '%s', '%s', %d, %d, '%s', (SELECT path FROM posts WHERE id = %d) || (SELECT last_value FROM posts_id_seq)),"
+	for i, post := range *posts {
+		err = p.checkPost(post, thread)
 		if err != nil {
-			return nil, models.NewError(models.InternalDatabase, err.Error())
-		}
-		if p.ParentImpl == nil {
-			p.Parent = 0
-		} else {
-			p.Parent=*p.ParentImpl
+			return nil, err
 		}
 
-		posts = append(posts, p)
+		temp := fmt.Sprintf(queryBody, post.Author, created, post.Message, thread.ID, post.Parent, thread.Forum, post.Parent)
+		// удаление запятой в конце queryBody для последнего подзапроса
+		if i == postsNumber-1 {
+			temp = temp[:len(temp)-1]
+		}
+		query.WriteString(temp)
 	}
-	rows.Close()
+	query.WriteString("RETURNING author, created, forum, id, message, parent, thread")
 
-	return posts, nil
+	tx, txErr := p.db.Begin()
+	if txErr != nil {
+		return nil, txErr
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(query.String())
+	defer rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	insertPosts := models.Posts{}
+	for rows.Next() {
+		post := models.Post{}
+		rows.Scan(
+			&post.Author,
+			&post.Created,
+			&post.Forum,
+			&post.ID,
+			&post.Message,
+			&post.Parent,
+			&post.Thread,
+		)
+		insertPosts = append(insertPosts, &post)
+	}
+	err = rows.Err()
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+	tx.Commit()
+	// по хорошему это впихнуть в хранимые процедуры, но нормальные ребята предпочитают костылить
+	p.db.Exec(`UPDATE forums SET posts = posts + $1 WHERE slug = $2`, len(insertPosts), thread.Forum)
+
+	for _, post := range insertPosts {
+		p.db.Exec(`  INSERT INTO forum_users ("forum_user", "forum", "email", "fullname", "about")
+		SELECT nickname, $2, email, fullname, about
+		FROM users
+		WHERE nickname = $1
+		ON CONFLICT DO NOTHING;`, post.Author, post.Forum)
+	}
+
+	return &insertPosts, nil
 }
 
-func (p *PostDBRepositoryImpl) getPostByIDImpl(id int64) (*models.Post, *models.Error) {
-	post := &models.Post{}
+var queryPostsWithSience = map[string]map[string]string{
+	"true": map[string]string{
+		"tree":        getPostsSienceDescLimitTreeSQL,
+		"parent_tree": getPostsSienceDescLimitParentTreeSQL,
+		"flat":        getPostsSienceDescLimitFlatSQL,
+	},
+	"false": map[string]string{
+		"tree":        getPostsSienceLimitTreeSQL,
+		"parent_tree": getPostsSienceLimitParentTreeSQL,
+		"flat":        getPostsSienceLimitFlatSQL,
+	},
+}
 
-	row := p.db.QueryRow(`SELECT p.id, p.message, p.is_edited, p.created, p.author, p.forum, p.thread, p.parent FROM posts p WHERE p.id = $1;`, id)
-	if err := row.Scan(&post.ID, &post.Message,
-		&post.IsEdited, &post.Created, &post.Author,
-		&post.Forum, &post.Thread, &post.ParentImpl); err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, models.NewError(models.RowNotFound, err.Error())
-		}
+var queryPostsNoSience = map[string]map[string]string{
+	"true": map[string]string{
+		"tree":        getPostsDescLimitTreeSQL,
+		"parent_tree": getPostsDescLimitParentTreeSQL,
+		"flat":        getPostsDescLimitFlatSQL,
+	},
+	"false": map[string]string{
+		"tree":        getPostsLimitTreeSQL,
+		"parent_tree": getPostsLimitParentTreeSQL,
+		"flat":        getPostsLimitFlatSQL,
+	},
+}
 
-		return nil, models.NewError(models.InternalDatabase, err.Error())
+func (p *PostDBRepositoryImpl) Update(postUpdate *models.PostUpdate, id int) (*models.Post, error) {
+	post, err := p.GetPostDB(id)
+	if err != nil {
+		return nil, models.PostNotFound
 	}
-	if post.ParentImpl == nil {
-		post.Parent = 0
+
+	if len(postUpdate.Message) == 0 {
+		return post, nil
+	}
+
+	rows := p.db.QueryRow(updatePostSQL, strconv.Itoa(id), &postUpdate.Message)
+
+	err = rows.Scan(
+		&post.Author,
+		&post.Created,
+		&post.Forum,
+		&post.IsEdited,
+		&post.Thread,
+		&post.Message,
+		&post.Parent,
+	)
+
+	if err == nil {
+		return post, nil
+	} else if (err.Error() == noRowsInResult) {
+		return nil, models.PostNotFound
 	} else {
-		post.Parent = *post.ParentImpl
+		return nil, err
 	}
-
-	return post, nil
 }
 
+const noRowsInResult 		= "no rows in result set"
 
+func(p *PostDBRepositoryImpl) GetPostDB(id int) (*models.Post, error) {
+	post := models.Post{}
 
+	err := p.db.QueryRow(
+		getPostSQL,
+		id,
+	).Scan(
+		&post.ID,
+		&post.Author,
+		&post.Message,
+		&post.Forum,
+		&post.Thread,
+		&post.Created,
+		&post.IsEdited,
+		&post.Parent,
+	)
 
+	if err == nil {
+		return &post, nil
+	} else if err.Error() == noRowsInResult {
+		return nil, models.PostNotFound
+	} else {
+		return nil, err
+	}
+}
+
+func (p *PostDBRepositoryImpl) GetPostByID(id int, related []string) (*models.PostFull, error) {
+	postFull := models.PostFull{}
+	var err error
+	postFull.Post, err = p.GetPostDB(id)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, model := range related {
+		switch model {
+		case "thread":
+			postFull.Thread, err = p.thread.GetThread(strconv.Itoa(int(postFull.Post.Thread)))
+		case "forum":
+			postFull.Forum, err = p.forum.GetForumBySlug(postFull.Post.Forum)
+		case "user":
+			postFull.Author, err = p.users.GetUserByNickname(postFull.Post.Author)
+		}
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &postFull, nil
+}
+
+func (p *PostDBRepositoryImpl) GetThreadPostsDB(param, limit, since, sort, desc string) (*models.Posts, error) {
+	thread, err := p.thread.GetThread(param)
+	if err != nil {
+		return nil, models.ForumNotFound
+	}
+
+	var rows *pgx.Rows
+
+	if since != "" {
+		query := queryPostsWithSience[desc][sort]
+		rows, err = p.db.Query(query, thread.ID, since, limit)
+	} else {
+		query := queryPostsNoSience[desc][sort]
+		rows, err = p.db.Query(query, thread.ID, limit)
+	}
+	defer rows.Close()
+
+	if err != nil {
+		return nil, err
+	}
+
+	posts := models.Posts{}
+	for rows.Next() {
+		post := models.Post{}
+
+		err = rows.Scan(
+			&post.ID,
+			&post.Author,
+			&post.Parent,
+			&post.Message,
+			&post.Forum,
+			&post.Thread,
+			&post.Created,
+		)
+		if err != nil {
+			return nil, err
+		}
+		posts = append(posts, &post)
+	}
+	err = rows.Err()
+	if err != nil {
+		return nil, err
+	}
+	return &posts, nil
+}
+
+func NewPostDBRepositoryImpl(users UsersRepository, thread ThreadDBRepository,forum ForumRepository, db *pgx.ConnPool) PostRepository {
+	return &PostDBRepositoryImpl{users: users, thread: thread,forum:forum, db: db}
+}

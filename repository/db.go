@@ -22,15 +22,23 @@ type exequeryer interface {
 var db *pgx.ConnPool
 
 func ConnetctDB(service *DBService, dbUser, dbPass, dbHost, dbName string) *models.Error {
+	runtimeParams := make(map[string] string)
+	runtimeParams["application_name"] = "dz"
 	newDB, err := pgx.NewConnPool(pgx.ConnPoolConfig{
 		ConnConfig: pgx.ConnConfig{
 			Host:     dbHost,
 			User:     dbUser,
 			Password: dbPass,
 			Port:     5432,
+			TLSConfig: 		nil,
+			UseFallbackTLS: false,
 			Database: dbName,
+			RuntimeParams: 	runtimeParams,
 		},
-		MaxConnections: 50,
+		MaxConnections: 20,
+
+		AfterConnect:   nil,
+		AcquireTimeout: 0,
 	})
 	if err != nil {
 		return models.NewError(models.InternalDatabase, err.Error())
@@ -38,9 +46,9 @@ func ConnetctDB(service *DBService, dbUser, dbPass, dbHost, dbName string) *mode
 
 	db = newDB
 	service.DB = db
-	if err := service.Load(); err != nil {
-		return err
-	}
+	//if err := service.Load(); err != nil {
+	//	return err
+	//}
 
 	return nil
 }

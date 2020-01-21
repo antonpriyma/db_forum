@@ -16,16 +16,17 @@ type Handler struct {
 
 func main() {
 
-	//connectError := models.ConnetctDB("docker", "docker", "localhost", "docker")
+
 	dbService := repository.NewDBService()
+
 	connectError := repository.ConnetctDB(dbService, "docker", "docker", "localhost", "docker")
 	if connectError != nil {
 		log.Fatalf("cant open database connection: %s", connectError.Message)
 	}
 	forumRepo := repository.NewForumRepositoryImpl(repository.GetDB())
 	usersRepo := repository.NewUsersRepositoryImpl(repository.GetDB(),forumRepo)
-	threadsRepo := repository.NewThreadDBRepositoryImpl(repository.GetDB())
-	postsRepo := repository.NewPostDBRepositoryImpl(usersRepo,threadsRepo,repository.GetDB())
+	threadsRepo := repository.NewThreadDBRepositoryImpl(repository.GetDB(),forumRepo)
+	postsRepo := repository.NewPostDBRepositoryImpl(usersRepo,threadsRepo,forumRepo,repository.GetDB())
 
 
 	users := delivery.NewUsersHandlers(usersRepo)

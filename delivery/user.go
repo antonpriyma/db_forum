@@ -4,6 +4,8 @@ import (
 	"github.com/AntonPriyma/db_forum/models"
 	"github.com/AntonPriyma/db_forum/repository"
 	"github.com/AntonPriyma/db_forum/utils"
+	"github.com/go-openapi/swag"
+	"io/ioutil"
 	"net/http"
 
 
@@ -21,104 +23,85 @@ func NewUsersHandlers(users repository.UsersRepository) *UsersHandlers {
 
 // GetUser получение информации о пользователе форума по его имени.
 func(h *UsersHandlers) GetUser(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-	userInfo, err := h.users.GetUserByNickname(vars["nickname"])
-	if err != nil {
-		var code int
-		if err.Code == models.InternalDatabase {
-			code = http.StatusInternalServerError
-		} else if err.Code == models.RowNotFound {
-			code = http.StatusNotFound
-		}
+	params := mux.Vars(r)
+	nickname := params["nickname"]
 
-		utils.WriteEasyjson(w, code, err)
-		return
+	result, err := h.users.GetUserByNickname(nickname)
+
+	switch err {
+	case nil:
+		resp, _ := result.MarshalJSON()
+		utils.MakeResponse(w, 200, resp)
+	case models.UserNotFound:
+		utils.MakeResponse(w, 404, []byte(utils.MakeErrorUser(nickname)))
+	default:
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 	}
-
-	utils.WriteEasyjson(w, http.StatusOK, userInfo)
 }
 
 // CreateUser создание нового пользователя в базе данных.
 func(h *UsersHandlers)CreateUser(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	newUser := &models.User{}
-	err := utils.DecodeEasyjson(r.Body, newUser)
+	params := mux.Vars(r)
+	nickname := params["nickname"]
+
+	body, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
 	if err != nil {
-		utils.WriteEasyjson(w, http.StatusBadRequest, &models.Error{
-			Message: "unable to decode request body;",
-		})
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 		return
 	}
+	user := &models.User{}
+	err = user.UnmarshalJSON(body)
+	user.Nickname = nickname
 
-	newUser.Nickname = vars["nickname"]
-	used, errs := h.users.Create(newUser)
-	if used != nil {
-		utils.WriteEasyjson(w, http.StatusConflict, used)
+	if err != nil {
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 		return
 	}
+	result, err := h.users.Create(user)
 
-	if errs != nil {
-		var code int
-		if errs.Code == models.ValidationFailed {
-			code = http.StatusBadRequest
-		} else {
-			code = http.StatusInternalServerError
-		}
-
-		utils.WriteEasyjson(w, code, errs)
-		return
+	switch err {
+	case nil:
+		resp, _ := swag.WriteJSON(user)
+		utils.MakeResponse(w, 201, resp)
+	case models.UserIsExist:
+		resp, _ := swag.WriteJSON(result)
+		utils.MakeResponse(w, 409, resp)
+	default:
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 	}
-
-	utils.WriteEasyjson(w, http.StatusCreated, newUser)
 }
 
 // UpdateUser изменение информации в профиле пользователя.
 func(h *UsersHandlers)UpdateUser(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	updateFields := &models.UpdateUserFields{}
-	jsonErr := utils.DecodeEasyjson(r.Body, updateFields)
-	if jsonErr != nil {
-		utils.WriteEasyjson(w, http.StatusBadRequest, &models.Error{
-			Message: "unable to decode request body;",
-		})
-		return
-	}
+	params := mux.Vars(r)
+	nickname := params["nickname"]
 
-	user, err := h.users.GetUserByNickname(vars["nickname"])
+	body, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
 	if err != nil {
-		var code int
-		if err.Code == models.InternalDatabase {
-			code = http.StatusInternalServerError
-		} else if err.Code == models.RowNotFound {
-			code = http.StatusNotFound
-		}
-
-		utils.WriteEasyjson(w, code, err)
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 		return
 	}
+	user := &models.User{}
+	err = user.UnmarshalJSON(body)
+	user.Nickname = nickname
 
-	if updateFields.Fullname != nil {
-		user.Fullname = *updateFields.Fullname
+	if err != nil {
+		utils.MakeResponse(w, 500, []byte(err.Error()))
+		return
 	}
-	if updateFields.About != nil {
-		user.About = *updateFields.About
-	}
-	if updateFields.Email != nil {
-		user.Email = *updateFields.Email
-	}
-
 	err = h.users.Save(user)
-	if err != nil {
-		var code int
-		if err.Code == models.InternalDatabase {
-			code = http.StatusInternalServerError
-		} else if err.Code == models.RowDuplication {
-			code = http.StatusConflict
-		}
 
-		utils.WriteEasyjson(w, code, err)
-		return
+	switch err {
+	case nil:
+		resp, _ := user.MarshalJSON()
+		utils.MakeResponse(w, 200, resp)
+	case models.UserNotFound:
+		utils.MakeResponse(w, 404, []byte(utils.MakeErrorUser(nickname)))
+	case models.UserUpdateConflict:
+		utils.MakeResponse(w, 409, []byte(utils.MakeErrorEmail(nickname)))
+	default:
+		utils.MakeResponse(w, 500, []byte(err.Error()))
 	}
-
-	utils.WriteEasyjson(w, http.StatusOK, user)
 }
