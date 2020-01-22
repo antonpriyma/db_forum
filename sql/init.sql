@@ -5,6 +5,7 @@ CREATE EXTENSION IF NOT EXISTS citext;
 
 CREATE UNLOGGED TABLE IF NOT EXISTS users
 (
+    "id"       SERIAL PRIMARY KEY,
     "nickname" CITEXT PRIMARY KEY,
     "email"    CITEXT UNIQUE NOT NULL,
     "fullname" CITEXT        NOT NULL,
@@ -62,21 +63,27 @@ CREATE UNLOGGED TABLE forum_users
     "about"      TEXT
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fu_user ON forum_users (forum, forum_user);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_forum_slug  ON forums (slug);
+
+CREATE INDEX IF NOT EXISTS idx_threads_slug ON threads (slug);
+CREATE INDEX IF NOT EXISTS idx_threads_forum ON threads (forum);
+
+CREATE INDEX IF NOT EXISTS idx_posts_forum ON posts (forum);
+CREATE INDEX IF NOT EXISTS idx_posts_thread_path ON posts (thread, path);
 CREATE INDEX IF NOT EXISTS idx_posts_thread_id ON posts (thread, id);
 CREATE INDEX IF NOT EXISTS idx_posts_thread_id0 ON posts (thread, id) WHERE parent = 0;
 CREATE INDEX IF NOT EXISTS idx_posts_thread_id_created ON posts (id, created, thread);
 CREATE INDEX IF NOT EXISTS idx_posts_thread_path1_id ON posts (thread, (path[1]), id);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_fu_user ON forum_users (forum, forum_user);
-CREATE INDEX IF NOT EXISTS idx_threads_slug ON threads (slug);
-
 CREATE UNIQUE INDEX IF NOT EXISTS idx_votes_thread_nickname ON votes (thread, nickname);
 
-DROP FUNCTION IF EXISTS insert_vote();
+CLUSTER threads USING idx_threads_slug;
+CLUSTER forums USING idx_forum_slug;
+CLUSTER posts USING  idx_posts_thread_id0;
 
-CREATE INDEX IF NOT EXISTS idx_threads_forum ON threads (forum);
-CREATE INDEX IF NOT EXISTS idx_posts_forum ON posts (forum);
-CREATE INDEX IF NOT EXISTS idx_posts_thread_path ON posts (thread, path);
+
+DROP FUNCTION IF EXISTS insert_vote();
 CREATE OR REPLACE FUNCTION insert_vote() RETURNS TRIGGER AS
 $insert_vote$
 BEGIN
