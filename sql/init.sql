@@ -5,7 +5,6 @@ CREATE EXTENSION IF NOT EXISTS citext;
 
 CREATE UNLOGGED TABLE IF NOT EXISTS users
 (
-    "id"       SERIAL PRIMARY KEY,
     "nickname" CITEXT PRIMARY KEY,
     "email"    CITEXT UNIQUE NOT NULL,
     "fullname" CITEXT        NOT NULL,
@@ -77,11 +76,6 @@ CREATE INDEX IF NOT EXISTS idx_posts_thread_id_created ON posts (id, created, th
 CREATE INDEX IF NOT EXISTS idx_posts_thread_path1_id ON posts (thread, (path[1]), id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_votes_thread_nickname ON votes (thread, nickname);
-
-CLUSTER threads USING idx_threads_slug;
-CLUSTER forums USING idx_forum_slug;
-CLUSTER posts USING  idx_posts_thread_id0;
-
 
 DROP FUNCTION IF EXISTS insert_vote();
 CREATE OR REPLACE FUNCTION insert_vote() RETURNS TRIGGER AS
