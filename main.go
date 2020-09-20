@@ -66,7 +66,7 @@ func main() {
 	h := cors.AllowAll().Handler(r)
 
 
-	port := "5001"
+	port := "5000"
 	log.Printf("MainService successfully started at port %s", port)
 	err := http.ListenAndServe(":"+port, h)
 	if err != nil {

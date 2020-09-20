@@ -177,6 +177,7 @@ func (p *PostDBRepositoryImpl) Update(postUpdate *models.PostUpdate, id int) (*m
 
 const noRowsInResult 		= "no rows in result set"
 
+
 func(p *PostDBRepositoryImpl) GetPostDB(id int) (*models.Post, error) {
 	post := models.Post{}
 

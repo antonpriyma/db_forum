@@ -18,6 +18,7 @@ type ForumRepositoryImpl struct{
 }
 
 var QueryForumWithSince = map[string]string{
+
 	"true":  getForumThreadsDescSinceSQL,
 	"false": getForumThreadsSinceSQL,
 }
