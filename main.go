@@ -7,6 +7,7 @@ import (
 	"github.com/AntonPriyma/db_forum/delivery"
 	"github.com/AntonPriyma/db_forum/repository"
 	"github.com/gorilla/mux"
+	"github.com/rs/cors"
 )
 
 // Handler структура хэндлера запросов
@@ -34,7 +35,7 @@ func main() {
 	posts := delivery.NewPostHandlers(postsRepo, usersRepo)
 	forums := delivery.NewForumHandlers(forumRepo, usersRepo)
 	service := delivery.NewServiceHandlers(dbService)
-	r := mux.NewRouter().PathPrefix("/api").Subrouter()
+	r := mux.NewRouter()
 	r.HandleFunc("/user/{nickname}/profile", users.GetUser).Methods("GET")
 	r.HandleFunc("/user/{nickname}/create", users.CreateUser).Methods("POST")
 	r.HandleFunc("/user/{nickname}/profile", users.UpdateUser).Methods("POST")
@@ -48,8 +49,12 @@ func main() {
 	r.HandleFunc("/thread/{slug_or_id}/create", posts.CreatePosts).Methods("POST")
 	r.HandleFunc("/thread/{slug_or_id}/vote", threads.Vote).Methods("POST")
 	r.HandleFunc("/thread/{slug_or_id}/details", threads.GetThread).Methods("GET")
+
+
 	r.HandleFunc("/thread/{slug_or_id}/posts", posts.GetPosts).Methods("GET")
 	r.HandleFunc("/thread/{slug_or_id}/details", threads.UpdateThread).Methods("POST")
+
+
 
 	r.HandleFunc("/post/{id:[0-9]+}/details", posts.GetPost).Methods("GET")
 	r.HandleFunc("/post/{id:[0-9]+}/details", posts.UpdatePost).Methods("POST")
@@ -57,13 +62,13 @@ func main() {
 	r.HandleFunc("/service/status", service.GetStatus).Methods("GET")
 	r.HandleFunc("/service/clear", service.Clear).Methods("POST")
 
-	h := Handler{
-		Router: r,
-	}
 
-	port := "5000"
+	h := cors.AllowAll().Handler(r)
+
+
+	port := "5001"
 	log.Printf("MainService successfully started at port %s", port)
-	err := http.ListenAndServe(":"+port, h.Router)
+	err := http.ListenAndServe(":"+port, h)
 	if err != nil {
 		log.Fatalf("cant start main server. err: %s", err.Error())
 	}
